@@ -20,12 +20,19 @@ param(
 	#An optional custom path to the Pester module.
 	[String]$CustomModulePath,
 	#Include ANSI characters in output
-	[String]$IncludeAnsi
+	[Switch]$IncludeAnsi,
+	#Specify the path to a PesterConfiguration.psd1 file. The script will also look for a PesterConfiguration.psd1 in the current working directory.
+	[String]$ConfigurationPath
 )
 
-$VerbosePreference = 'SilentlyContinue'
-$WarningPreference = 'SilentlyContinue'
-$DebugPreference = 'SilentlyContinue'
+try {
+    $modulePath = if ($CustomModulePath) { Resolve-Path $CustomModulePath -ErrorAction Stop } else { 'Pester' }
+	Import-Module -Name $modulePath -MinimumVersion '5.2.0' -ErrorAction Stop
+} catch {
+	if ($PSItem.FullyQualifiedErrorId -ne 'Modules_ModuleWithVersionNotFound,Microsoft.PowerShell.Commands.ImportModuleCommand') { throw }
+
+	throw [NotSupportedException]'Pester 5.2.0 or greater is required to use the Pester Tests extension but was not found on your system. Please install the latest version of Pester from the PowerShell Gallery.'
+}
 
 if ($psversiontable.psversion -ge '7.2.0') {
 	if ($IncludeAnsi) {
@@ -34,6 +41,14 @@ if ($psversiontable.psversion -ge '7.2.0') {
 		$PSStyle.OutputRendering = 'PlainText'
 	}
 }
+
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+	#Defaults to inquire
+	$DebugPreference = 'continue'
+}
+Write-Debug "Home: $env:HOME"
+Write-Debug "PSModulePath: $env:PSModulePath"
+Write-Debug "OutputRendering: $($PSStyle.OutputRendering)"
 
 filter Import-PrivateModule ([Parameter(ValueFromPipeline)][string]$Path) {
 	<#
@@ -107,8 +122,6 @@ function Unregister-PesterPlugin ([hashtable]$PluginConfiguration) {
 
 #Main Function
 function Invoke-Main {
-	$modulePath = if ($CustomModulePath) { Resolve-Path $CustomModulePath -ErrorAction Stop } else { 'Pester' }
-	Import-Module -MinimumVersion '5.2.0' -Name $modulePath -ErrorAction Stop
 	$pluginModule = Import-PrivateModule $PSScriptRoot/PesterTestPlugin.psm1
 
 	$configArgs = @{
@@ -138,12 +151,24 @@ function Invoke-Main {
 				[void]$paths.Add($PSItem)
 			}
 		}
-		$config = New-PesterConfiguration @{
-			Run = @{
-				SkipRun  = [bool]$Discovery
-				PassThru = $true
-			}
+
+		[PesterConfiguration]$config = if ($PesterPreference) {
+			Write-Debug "$PesterPreference Detected, using for base configuration"
+			$pesterPreference
+		} elseif ($ConfigurationPath) {
+			Write-Debug "-ConfigurationPath $ConfigurationPath was specified, looking for configuration"
+			$resolvedConfigPath = Resolve-Path $ConfigurationPath -ErrorAction Stop
+			Write-Debug "Pester Configuration found at $ConfigurationPath, using as base configuration."
+			Import-PowerShellDataFile $resolvedConfigPath -ErrorAction Stop
+		} elseif (Test-Path './PesterConfiguration.psd1') {
+			Write-Debug "PesterConfiguration.psd1 found in test root directory $cwd, using as base configuration."
+			Import-PowerShellDataFile './PesterConfiguration.psd1' -ErrorAction Stop
+		} else {
+			New-PesterConfiguration
 		}
+
+		$config.Run.SkipRun = [bool]$Discovery
+		$config.Run.PassThru = $true
 
 		#If Verbosity is $null it will use PesterPreference
 		if ($Discovery) { $config.Output.Verbosity = 'None' }

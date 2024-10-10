@@ -20,47 +20,52 @@ jobs:
     runs-on: ubuntu-20.04
     steps:
       - name: 🚚 Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: 📥 Cache
         id: cache
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: |
             node_modules
+            .vscode-test
           key: ${{ runner.os }}-node-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: ➕ Dependencies
-        uses: pnpm/action-setup@v2.2.4
+        uses: pnpm/action-setup@v4.0.0
         with:
           run_install: true
 
       - name: 🔍 Get Calendar Version
         id: version
         run: |
+          git config --global --add safe.directory $PWD
+          dir env:
           [string]$version = & .github\Get-CalendarVersion.ps1 -MergeBuild
           "Calculated Version: $version"
-          $ENV:GITHUB_OUTPUT = "version=$version"
-          $ENV:GITHUB_OUTPUT = "calendarVersion=$version"
-          $ENV:GITHUB_OUTPUT = "semanticVersion=$version"
+          "version=$version" >> $ENV:GITHUB_OUTPUT
+          "calendarVersion=$version" >> $ENV:GITHUB_OUTPUT
+          "semanticVersion=$version" >> $ENV:GITHUB_OUTPUT
 
-      - name: 👷‍♂️ Build
+      - name: 👷‍♂️ Build and Package
         run: |
-          pnpm run build ${{steps.version.outputs.version}}
+          pnpm package ${{steps.version.outputs.version}}
 
       - name: ⬆ Artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
-          name: vsix-${{steps.version.outputs.version}}
+          name: Pester Tests VSCode Extension
           path: '*.vsix'
 
       - name: 📝 Draft Github Release
         if: github.ref == 'refs/heads/main' || github.head_ref == 'ci'
-        uses: release-drafter/release-drafter@v5
+        uses: release-drafter/release-drafter@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           version: '${{steps.version.outputs.version}}'
           prerelease: true
+          tag: 'v${{steps.version.outputs.version}}'
+

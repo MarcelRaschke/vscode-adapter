@@ -16,7 +16,7 @@ Describe 'PesterInterface' {
     It 'Basic.Tests Discovery' {
       $paths = "$testDataPath/Tests/Basic.Tests.ps1"
       & $PesterInterface -Path $paths -Discovery -PipeName $PipeOutPath -DryRun 6>$null
-      Get-Content $PipeOutPath | ConvertFrom-Json | ForEach-Object label | Should -HaveCount 61
+      Get-Content $PipeOutPath | ConvertFrom-Json | ForEach-Object label | Should -HaveCount 58
     }
 		It 'Simple Test Run' {
 			$paths = "$testDataPath/Tests/True.Tests.ps1"
@@ -132,16 +132,6 @@ Describe 'PesterInterface' {
 		AfterAll {
 			Remove-Module PesterTestPlugin
 		}
-    It 'Multiple Module Failure' {
-      Set-ItResult -Skipped -Because 'Get-Module Mock is not working for some reason'
-      Mock -CommandName 'Get-Module' -MockWith { @('PesterModule1', 'PesterModule2') }
-
-      $mockTestParameter = [PSCustomObject] @{
-        UserDuration      = 10000
-        FrameworkDuration = 20000
-      }
-      { Get-DurationString @mockTestParameter } | Should -Throw '*Multiple Pester Modules found*'
-    }
     It 'Duration Format <Name>' {
       $mockTestParameter = [PSCustomObject] @{
         UserDuration      = $UserDuration

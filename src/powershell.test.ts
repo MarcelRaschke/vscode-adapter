@@ -9,7 +9,7 @@ import {
 	defaultPowershellExePath,
 	PowerShellError
 } from './powershell'
-import { should, assert, expect } from 'chai'
+import { expect } from 'chai'
 
 describe('jsonParseTransform', () => {
 	interface TestObject {
@@ -48,12 +48,13 @@ describe('jsonParseTransform', () => {
 			await pipeline(source, jsonPipe)
 		} catch (err) {
 			const result = err as Error
-			expect(result.message).to.match(/Unexpected non-whitespace/)
+			expect(result.message).to.match(/Unexpected token :/)
 		}
 	})
 })
 
-describe('run', () => {
+describe('run', function () {
+	this.slow(2500)
 	let ps: PowerShell
 	beforeEach(() => {
 		ps = new PowerShell()
@@ -85,7 +86,9 @@ describe('run', () => {
 	})
 
 	it('mixed', async () => {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const successResult: any[] = []
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const infoResult: any[] = []
 		const streams = new PSOutput()
 		streams.success
@@ -110,7 +113,8 @@ describe('run', () => {
 	})
 })
 
-describe('exec', () => {
+describe('exec', function () {
+	this.slow(2500)
 	let ps: PowerShell
 	beforeEach(() => {
 		ps = new PowerShell()

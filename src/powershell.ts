@@ -4,6 +4,9 @@ import { resolve } from 'path'
 import { Readable, Transform, Writable } from 'stream'
 import { pipeline, finished } from 'stream/promises'
 import ReadlineTransform from 'readline-transform'
+import createStripAnsiTransform from './stripAnsiStream'
+import { homedir } from 'os'
+import jsonParseSafe from 'json-parse-safe'
 
 /** Streams for PowerShell Output: https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_output_streams?view=powershell-7.1
  *
@@ -22,10 +25,17 @@ export interface IPSOutput {
 
 /** Includes an object of the full PowerShell error */
 export class PowerShellError extends Error {
+	// TODO: Strong type this
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	constructor(message: string, public error: any) {
-		super(message)
+		const errorDetail = (typeof error === 'string')
+			? error
+			: `${error.Exception.Message} ${error.ScriptStackTrace}`
+
+		super(`${message}: ${errorDetail}`)
 	}
 }
+
 
 /** A simple Readable that emits events when new objects are pushed from powershell.
  * read() does nothing and generally should not be called, you should subscribe to the events instead
@@ -71,10 +81,15 @@ export class PSOutputUnified implements IPSOutput {
 export function createJsonParseTransform() {
 	return new Transform({
 		objectMode: true,
-		transform(chunk: string, encoding: string, done) {
-			const obj = JSON.parse(chunk)
-			this.push(obj)
-			done()
+		transform(chunk: string, _encoding: string, next) {
+			const jsonResult = jsonParseSafe(chunk)
+			// Check if jsonResult is the non exported type OutputError
+			if ('error' in jsonResult) {
+				jsonResult.error.message = `${jsonResult.error.message} \r\nJSON: ${chunk}`
+				next(jsonResult.error)
+			} else {
+				next(undefined, jsonResult.value)
+			}
 		}
 	})
 }
@@ -89,15 +104,17 @@ export function createJsonParseTransform() {
 function createWatchForScriptFinishedMessageTransform(streamToEnd: Writable) {
 	return new Transform({
 		objectMode: true,
-		transform(chunk: any, encoding: string, done) {
+		// TODO: Strong type this
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		transform(chunk: any, _encoding: string, next) {
 			// If special message from PowerShell Invocation Script
 			// TODO: Handle this as a class?
 			if (chunk.__PSINVOCATIONID && chunk.finished === true) {
 				streamToEnd.end()
+				next()
 			} else {
-				this.push(chunk)
+				next(undefined, chunk)
 			}
-			done()
 		}
 	})
 }
@@ -106,7 +123,7 @@ function createWatchForScriptFinishedMessageTransform(streamToEnd: Writable) {
 export function createSplitPSOutputStream(streams: IPSOutput) {
 	return new Writable({
 		objectMode: true,
-		write(chunk, _, done) {
+		write(chunk, _, next) {
 			const record = chunk.value ?? chunk
 			switch (chunk.__PSStream) {
 				// Unless a stream is explicitly set, the default is to use the success stream
@@ -135,11 +152,11 @@ export function createSplitPSOutputStream(streams: IPSOutput) {
 					streams.progress.push(record)
 					break
 				default:
-					throw new Error(`Unknown PSStream Reported: ${chunk.__PSStream}`)
+					next(new Error(`Unknown PSStream Reported: ${chunk.__PSStream}`))
 			}
-			done()
+			next()
 		},
-		final(done) {
+		final(next) {
 			streams.success.destroy()
 			streams.error.destroy()
 			streams.warning.destroy()
@@ -147,7 +164,7 @@ export function createSplitPSOutputStream(streams: IPSOutput) {
 			streams.debug.destroy()
 			streams.information.destroy()
 			streams.progress.destroy()
-			done()
+			next()
 		}
 	})
 }
@@ -184,10 +201,24 @@ export class PowerShell {
 					'pwsh not found in your path and you are not on Windows so PowerShell 5.1 is not an option. Did you install PowerShell first?'
 				)
 			}
+			const psEnv = process.env
+
+			if (!process.env.HOME) {
+				// Sometimes this is missing and will screw up PSModulePath detection on Windows/Linux
+				process.env.HOME = homedir()
+			}
+
+			// This disables ANSI output in PowerShell so it doesnt "corrupt" the JSON output
+			//Ref: https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_ansi_terminals?view=powershell-7.3#disabling-ansi-output
+			psEnv.NO_COLOR = '1'
+
 			this.psProcess = spawn(
 				this.resolvedExePath,
 				['-NoProfile', '-NonInteractive', '-NoExit', '-Command', '-'],
-				{ cwd: this.cwd }
+				{
+					cwd: this.cwd,
+					env: psEnv
+				}
 			)
 			// Warn if we have more than one listener set on a process
 			this.psProcess.stdout.setMaxListeners(1)
@@ -246,20 +277,30 @@ export class PowerShell {
 		// TODO: RemoveAllListeners should be more specific
 		this.psProcess.stdout.removeAllListeners()
 		this.psProcess.stderr.removeAllListeners()
+
+		/** Will emit an error if an error is received on the stderr of the PowerShell process */
 		const errorWasEmitted = new Promise((_resolve, reject) => {
 			// Read error output one line at a time
-			function handleError(jsonSerializedError: string) {
-				reject(
-					new PowerShellError(
-						'A terminating error occured while running the script',
-						JSON.parse(jsonSerializedError)
+			function handleError(errorAsJsonOrString: string) {
+				const jsonResult = jsonParseSafe(errorAsJsonOrString)
+				const error = ("error" in jsonResult)
+					? new PowerShellError(
+						'An initialization error occured while running the script',
+						errorAsJsonOrString
 					)
-				)
+					: new PowerShellError(
+						'A terminating error was received from PowerShell',
+						jsonResult.value
+					)
+				reject(error)
 			}
 
+			// Wires up to the error stream
 			if (this.psProcess !== undefined) {
 				const errorStream = this.psProcess.stderr.pipe(
-					new ReadlineTransform({ skipEmpty: false })
+					new ReadlineTransform({ skipEmpty: false }),
+				).pipe(
+					createStripAnsiTransform()
 				)
 				errorStream.once('data', handleError)
 			}
@@ -271,14 +312,10 @@ export class PowerShell {
 			new ReadlineTransform({ skipEmpty: false })
 		)
 
-		// Workaround for https://github.com/nodejs/node/issues/40191
-		const pipelineCompleted = pipeline<
-			ReadlineTransform,
-			Transform,
-			Transform,
-			Writable
-		>(
+		// This is our main input stream processing pipeline where we handle messages from PowerShell
+		const pipelineCompleted = pipeline(
 			readlineTransform,
+			createStripAnsiTransform(),
 			createJsonParseTransform(),
 			createWatchForScriptFinishedMessageTransform(readlineTransform),
 			createSplitPSOutputStream(psOutput)
@@ -292,7 +329,7 @@ export class PowerShell {
 		)
 		// Start the script, the output will be processed by the above events
 		if (script) {
-			const fullScript = `${runnerScriptPath} {${script}}\n`
+			const fullScript = `& '${runnerScriptPath}' {${script}}\n`
 			this.psProcess.stdin.write(fullScript)
 		}
 
@@ -335,7 +372,7 @@ export class PowerShell {
 				'{"__PSINVOCATIONID": "CANCELLED", "finished": true}'
 			)
 		}
-		this.reset()
+		return this.reset()
 	}
 
 	/** Kill any existing invocations and reset the state */

@@ -17,10 +17,10 @@ This extension provides the ability to run [Pester](https://pester.dev/) tests u
 
 ### Highlights
 
-🔍 **Pester Test Browser**  
-🐞 **Debugging Support**  
-👩‍💻 **Native PowerShell Extension Integration**  
-👨‍👧‍👦 **Expands Test Cases**  
+🔍 **Pester Test Browser**
+🐞 **Debugging Support**
+👩‍💻 **Native PowerShell Extension Integration**
+👨‍👧‍👦 **Expands Test Cases**
 
 ### Extension Prerequisites
 
@@ -50,3 +50,8 @@ This extension will use the PowerShell Extension Pester verbosity settings for t
 ### Troubleshooting
 
 The Pester `Output` pane maintains a log of the activities that occur with the Pester extension. You can use `Set Log Level` in the command palette to increase the log level to debug or trace to get more information about what is going on. Include this information when submitting an issue along with reproduction steps.
+
+### Known Issues
+
+- For test history purposes, a test is uniquely identified by its full path, e.g. Describe/Context/It. If you rename a test or move a test to another context/describe, it will be treated as a new test and test history will be reset
+- If you do not have any .tests.ps1 files in your directory upon startup, you will currently need to reload vscode for the extension to activate after you create the .tests.ps1 file. [This is is a known issue that is being tracked](https://github.com/pester/vscode-adapter/issues/122)
